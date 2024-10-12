@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/disgoorg/disgo/webhook"
+
 	"catbox-scraper/catbox"
 )
 
@@ -31,6 +33,15 @@ func main() {
 		if err != nil {
 			log.Fatalf("Error initializing proxy manager: %v", err)
 		}
+	}
+
+	if catbox.G_config.WebhookEnabled {
+		client, err := webhook.NewWithURL(catbox.G_config.WebhookURL)
+		if err != nil {
+			catbox.G_logger.Errorln(err)
+			os.Exit(1)
+		}
+		catbox.G_webhook_client = client
 	}
 
 	catbox.EnsureDownloadPathExists(catbox.G_config.DownloadPath)
