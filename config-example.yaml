@@ -1,0 +1,28 @@
+workers: 300 # Number of concurrent workers
+retry_limit: 2 # Number of retries for failed downloads or failed check
+
+download_enabled: false
+download_path: "./downloads" # Path to save the downloaded files
+allowed_extensions: # File extensions to download
+  - .mp4
+  - .mkv
+  - .webm
+  - .gif
+  - .jpg
+  - .jpeg
+  - .png
+  - .zip
+  - .mp3
+  - .wav
+  - .rar
+
+log_level: "info" # Log level: debug, info, warn, error
+database: "db.sqlite" # SQLite database file name
+base_url: "https://files.catbox.moe/"
+
+use_proxies: false # Whether to use proxies or not
+proxy_file: "proxies.txt" # File with proxies (one per line)
+proxy_type: "http" # proxy type: socks5, http, https
+
+webhook_enabled: true
+webhook_url: "YOUR WEBHOOK URL HERE" # discord webhook url
