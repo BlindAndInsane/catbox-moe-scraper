@@ -1,5 +1,4 @@
 config.yaml
-catbox-scraper
-catbox-scraper.exe
+catbox-scraper*
 downloads/
 db.sqlite
