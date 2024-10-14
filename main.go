@@ -49,6 +49,16 @@ func main() {
 	var wg sync.WaitGroup
 	idChan := make(chan string, catbox.G_config.Workers)
 
+	catbox.G_Req_Per_Sec.Store(0)
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		for range ticker.C {
+			catbox.G_logger.Infof("Request per Sec = %d", catbox.G_Req_Per_Sec.Load())
+			catbox.G_Req_Per_Sec.Store(0)
+		}
+	}()
+
 	// Create a context for cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 

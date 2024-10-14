@@ -38,7 +38,7 @@ func Worker(ctx context.Context, db *sql.DB, idChan <-chan string, wg *sync.Wait
 								if retries > 0 {
 									G_logger.Debugf("Retrying (%d retries left)...", retries)
 								} else {
-									G_logger.Errorf("Max retries reached. Skipping %s.", id)
+									G_logger.Debugf("Max retries reached. Skipping %s.", id)
 								}
 							} else {
 								break
@@ -121,10 +121,12 @@ func checkFileExists(id, ext string) (bool, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		G_logger.Errorf("Error making request for %s: %v", url_s, err)
+		G_logger.Debugf("Error making request for %s: %v", url_s, err)
 		return false, nil
 	}
 	defer resp.Body.Close()
+
+	G_Req_Per_Sec.Add(1)
 
 	if resp.StatusCode == http.StatusOK {
 		return true, nil
@@ -161,6 +163,6 @@ func downloadFile(id, ext string) error {
 		return err
 	}
 
-	G_logger.Infof("Successfully downloaded: %s", url)
+	G_logger.Debugf("Successfully downloaded: %s", url)
 	return nil
 }
