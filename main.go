@@ -68,7 +68,7 @@ func main() {
 				rps := catbox.G_Req_Per_Sec.Load()
 				rpm += rps
 				total_req += rps
-				catbox.G_logger.Infof("Requests/sec = %d | Requests/min = %d | Found/min = %d\nTotal Req = %d | Total Found = %d\n", rps, rpm, catbox.G_Found_Per_Min.Load(), total_req, total_found)
+				catbox.G_logger.Infof("Requests/sec = %d | Requests/min = %d | Found/min = %d | Total Req = %d | Total Found = %d\n", rps, rpm, catbox.G_Found_Per_Min.Load(), total_req, total_found)
 				catbox.G_Req_Per_Sec.Store(0)
 			case <-min.C:
 				total_found += catbox.G_Found_Per_Min.Load()
