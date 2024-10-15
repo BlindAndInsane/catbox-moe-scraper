@@ -109,9 +109,9 @@ func checkFileExists(id, ext string) (bool, error) {
 			}).DialContext,
 			TLSHandshakeTimeout: 7 * time.Second,
 		}
-		client = &http.Client{Transport: transport, Timeout: 20 * time.Second}
+		client = &http.Client{Transport: transport, Timeout: 10 * time.Second}
 	} else {
-		client = &http.Client{Timeout: 20 * time.Second}
+		client = &http.Client{Timeout: 10 * time.Second}
 	}
 
 	req, err := http.NewRequest("HEAD", url_s, nil)
