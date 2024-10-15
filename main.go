@@ -50,14 +50,22 @@ func main() {
 	idChan := make(chan string, catbox.G_config.Workers)
 
 	catbox.G_Req_Per_Sec.Store(0)
-	catbox.G_Found_Per_Sec.Store(0)
+	catbox.G_Found_Per_Min.Store(0)
 
 	go func() {
-		ticker := time.NewTicker(time.Second)
-		for range ticker.C {
-			catbox.G_logger.Infof("Request/sec = %d | Found/sec = %d", catbox.G_Req_Per_Sec.Load(), catbox.G_Found_Per_Sec.Load())
-			catbox.G_Found_Per_Sec.Store(0)
-			catbox.G_Req_Per_Sec.Store(0)
+		sec := time.NewTicker(time.Second)
+		min := time.NewTicker(time.Minute)
+		defer sec.Stop()
+		defer min.Stop()
+
+		for {
+			select {
+			case <-sec.C:
+				catbox.G_logger.Infof("Request/sec = %d | Found/min = %d\n", catbox.G_Req_Per_Sec.Load(), catbox.G_Found_Per_Min.Load())
+				catbox.G_Req_Per_Sec.Store(0)
+			case <-min.C:
+				catbox.G_Found_Per_Min.Store(0)
+			}
 		}
 	}()
 
