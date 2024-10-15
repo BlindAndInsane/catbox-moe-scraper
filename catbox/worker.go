@@ -46,7 +46,7 @@ func Worker(ctx context.Context, db *sql.DB, idChan <-chan string, wg *sync.Wait
 						}
 
 						if exists {
-							G_Req_Per_Sec.Add(1)
+							G_Found_Per_Min.Add(1)
 							urll := fmt.Sprintf("%s%s%s", G_config.BaseURL, id, ext)
 							_, err := db.Exec("INSERT INTO valid_ids (id, url, ext) VALUES (?, ?, ?)", id, urll, ext)
 							if err != nil {
