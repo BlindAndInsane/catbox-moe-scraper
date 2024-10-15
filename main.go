@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -16,6 +17,7 @@ import (
 )
 
 func main() {
+	slog.SetLogLoggerLevel(slog.LevelError) // for disgo
 	err := catbox.LoadConfig()
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
