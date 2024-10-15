@@ -49,7 +49,7 @@ func Worker(ctx context.Context, db *sql.DB, idChan <-chan string, wg *sync.Wait
 							urll := fmt.Sprintf("%s%s%s", G_config.BaseURL, id, ext)
 							_, err := db.Exec("INSERT INTO valid_ids (id, url, ext) VALUES (?, ?, ?)", id, urll, ext)
 							if err != nil {
-								G_logger.Errorf("Failed to insert file record into database: %v", err)
+								G_logger.Debugf("Failed to insert file record into database: %v", err)
 							}
 
 							if G_config.WebhookEnabled {
@@ -111,7 +111,7 @@ func checkFileExists(id, ext string) (bool, error) {
 		}
 		client = &http.Client{Transport: transport, Timeout: 10 * time.Second}
 	} else {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = &http.Client{Timeout: 5 * time.Second}
 	}
 
 	req, err := http.NewRequest("HEAD", url_s, nil)
