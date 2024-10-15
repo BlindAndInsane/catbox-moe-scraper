@@ -57,13 +57,20 @@ func main() {
 		min := time.NewTicker(time.Minute)
 		defer sec.Stop()
 		defer min.Stop()
-
+		var rpm int64 = 0
+		var total_found int64 = 0
+		var total_req int64 = 0
 		for {
 			select {
 			case <-sec.C:
-				catbox.G_logger.Infof("Request/sec = %d | Found/min = %d\n", catbox.G_Req_Per_Sec.Load(), catbox.G_Found_Per_Min.Load())
+				rps := catbox.G_Req_Per_Sec.Load()
+				rpm += rps
+				total_req += rps
+				catbox.G_logger.Infof("Requests/sec = %d | Requests/min = %d | Found/min = %d\nTotal Req = %d | Total Found = %d\n", rps, rpm, catbox.G_Found_Per_Min.Load(), total_req, total_found)
 				catbox.G_Req_Per_Sec.Store(0)
 			case <-min.C:
+				total_found += catbox.G_Found_Per_Min.Load()
+				rpm = 0
 				catbox.G_Found_Per_Min.Store(0)
 			}
 		}
