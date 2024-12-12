@@ -4,20 +4,20 @@ import (
 	"bufio"
 	"context"
 	"log"
-	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/disgo/webhook"
+	"github.com/sirupsen/logrus"
 
 	"catbox-scraper/catbox"
 )
 
 func main() {
-	slog.SetLogLoggerLevel(slog.LevelError) // for disgo
 	err := catbox.LoadConfig()
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
@@ -38,7 +38,17 @@ func main() {
 	}
 
 	if catbox.G_config.WebhookEnabled {
-		client, err := webhook.NewWithURL(catbox.G_config.WebhookURL)
+		webhook_logger := logrus.New()
+		webhook_logger.SetLevel(logrus.ErrorLevel)
+		client, err := webhook.NewWithURL(
+			catbox.G_config.WebhookURL,
+			webhook.WithLogger(webhook_logger),
+			webhook.WithRestClientConfigOpts(
+				rest.WithRateRateLimiterConfigOpts(
+					rest.WithRateLimiterLogger(webhook_logger),
+				),
+			),
+		)
 		if err != nil {
 			catbox.G_logger.Errorln(err)
 			os.Exit(1)
