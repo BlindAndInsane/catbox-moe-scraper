@@ -2,7 +2,7 @@ package main
 
 import (
 	"bufio"
-	"context"
+	"database/sql"
 	"log"
 	"os"
 	"os/signal"
@@ -18,8 +18,7 @@ import (
 )
 
 func main() {
-	err := catbox.LoadConfig()
-	if err != nil {
+	if err := catbox.LoadConfig(); err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
 
@@ -30,30 +29,15 @@ func main() {
 	defer db.Close()
 
 	if catbox.G_config.UseProxies {
-		var err error
-		catbox.G_proxyManager, err = catbox.InitProxyManager(catbox.G_config.ProxyFile)
-		if err != nil {
+		if err := initializeProxyManager(); err != nil {
 			log.Fatalf("Error initializing proxy manager: %v", err)
 		}
 	}
 
 	if catbox.G_config.WebhookEnabled {
-		webhook_logger := logrus.New()
-		webhook_logger.SetLevel(logrus.ErrorLevel)
-		client, err := webhook.NewWithURL(
-			catbox.G_config.WebhookURL,
-			webhook.WithLogger(webhook_logger),
-			webhook.WithRestClientConfigOpts(
-				rest.WithRateRateLimiterConfigOpts(
-					rest.WithRateLimiterLogger(webhook_logger),
-				),
-			),
-		)
-		if err != nil {
-			catbox.G_logger.Errorln(err)
-			os.Exit(1)
+		if err := initializeWebhookClient(); err != nil {
+			log.Fatalf("Error initializing webhook client: %v", err)
 		}
-		catbox.G_webhook_client = client
 	}
 
 	catbox.EnsureDownloadPathExists(catbox.G_config.DownloadPath)
@@ -61,44 +45,72 @@ func main() {
 	var wg sync.WaitGroup
 	idChan := make(chan string, catbox.G_config.Workers)
 
-	catbox.G_Req_Per_Sec.Store(0)
-	catbox.G_Found_Per_Min.Store(0)
+	startMonitoring()
+	startWorkers(db, idChan, &wg)
+	handleCommandsAndSignals(idChan, &wg)
+}
 
+func initializeProxyManager() error {
+	var err error
+	catbox.G_proxyManager, err = catbox.InitProxyManager(catbox.G_config.ProxyFile)
+	return err
+}
+
+func initializeWebhookClient() error {
+	webhookLogger := logrus.New()
+	webhookLogger.SetLevel(logrus.ErrorLevel)
+
+	client, err := webhook.NewWithURL(
+		catbox.G_config.WebhookURL,
+		webhook.WithLogger(webhookLogger),
+		webhook.WithRestClientConfigOpts(
+			rest.WithRateRateLimiterConfigOpts(
+				rest.WithRateLimiterLogger(webhookLogger),
+			),
+		),
+	)
+	if err != nil {
+		return err
+	}
+
+	catbox.G_webhook_client = client
+	return nil
+}
+
+func startMonitoring() {
 	go func() {
-		sec := time.NewTicker(time.Second)
-		min := time.NewTicker(time.Minute)
-		defer sec.Stop()
-		defer min.Stop()
-		var rpm int64 = 0
-		var total_found int64 = 0
-		var total_req int64 = 0
-		var fpm int64 = 0
+		secTicker := time.NewTicker(time.Second)
+		minTicker := time.NewTicker(time.Minute)
+		defer secTicker.Stop()
+		defer minTicker.Stop()
+
+		var rpm, totalReq, totalFound int64
 		for {
 			select {
-			case <-sec.C:
+			case <-secTicker.C:
 				rps := catbox.G_Req_Per_Sec.Load()
 				rpm += rps
-				total_req += rps
-				fpm = catbox.G_Found_Per_Min.Load()
-				catbox.G_logger.Infof("Requests/sec = %d | Requests/min = %d | Found/min = %d | Total Req = %d | Total Found = %d\n", rps, rpm, fpm, total_req, total_found+fpm)
+				totalReq += rps
+				fpm := catbox.G_Found_Per_Min.Load()
+				catbox.G_logger.Infof("Requests/sec: %d | Requests/min: %d | Found/min: %d | Total Req: %d | Total Found: %d",
+					rps, rpm, fpm, totalReq, totalFound+fpm)
 				catbox.G_Req_Per_Sec.Store(0)
-			case <-min.C:
-				total_found += catbox.G_Found_Per_Min.Load()
+			case <-minTicker.C:
+				totalFound += catbox.G_Found_Per_Min.Load()
 				rpm = 0
 				catbox.G_Found_Per_Min.Store(0)
 			}
 		}
 	}()
+}
 
-	// Create a context for cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Start workers
+func startWorkers(db *sql.DB, idChan chan string, wg *sync.WaitGroup) {
 	for i := 0; i < catbox.G_config.Workers; i++ {
-		wg.Add(1) // Correctly add to the wait group here
-		go catbox.Worker(ctx, db, idChan, &wg)
+		go catbox.Worker(db, idChan, wg)
 	}
+}
 
+func handleCommandsAndSignals(idChan chan string, wg *sync.WaitGroup) {
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -110,39 +122,19 @@ func main() {
 		case cmd := <-cmdChan:
 			switch cmd {
 			case "pause":
-				if catbox.G_state == catbox.StateRunning {
-					catbox.G_state = catbox.StatePaused
-					clearChannel(idChan)
-					log.Println("Paused.")
-				}
+				pauseProcessing(idChan)
 			case "resume":
-				if catbox.G_state == catbox.StatePaused {
-					catbox.G_state = catbox.StateRunning
-					log.Println("Resumed.")
-				}
+				resumeProcessing()
 			case "stop":
-				catbox.G_state = catbox.StateStopped
-				log.Println("Stopping...")
-				cancel()
-				clearChannel(idChan)
-				close(idChan)
-				wg.Wait()
-				os.Exit(0)
+				shutdown(idChan, wg)
 			}
 		case <-signalChan:
-			catbox.G_state = catbox.StateStopped
-			log.Println("Received shutdown signal. Stopping...")
-			cancel() // Cancel context to signal workers to stop
-			clearChannel(idChan)
-			close(idChan)
-			wg.Wait()
-			os.Exit(0)
+			shutdown(idChan, wg)
 		default:
 			if catbox.G_state == catbox.StateRunning {
-				id := catbox.GenerateID()
-				idChan <- id
+				idChan <- catbox.GenerateID()
 			} else if catbox.G_state == catbox.StatePaused {
-				time.Sleep(1 * time.Second)
+				time.Sleep(time.Second)
 			}
 		}
 	}
@@ -158,6 +150,30 @@ func processCommands(cmdChan chan<- string) {
 		}
 		cmdChan <- cmd[:len(cmd)-1]
 	}
+}
+
+func pauseProcessing(idChan chan string) {
+	if catbox.G_state == catbox.StateRunning {
+		catbox.G_state = catbox.StatePaused
+		clearChannel(idChan)
+		log.Println("Paused.")
+	}
+}
+
+func resumeProcessing() {
+	if catbox.G_state == catbox.StatePaused {
+		catbox.G_state = catbox.StateRunning
+		log.Println("Resumed.")
+	}
+}
+
+func shutdown(idChan chan string, wg *sync.WaitGroup) {
+	catbox.G_state = catbox.StateStopped
+	log.Println("Shutting down...")
+	clearChannel(idChan)
+	close(idChan)
+	wg.Wait()
+	os.Exit(0)
 }
 
 func clearChannel(ch chan string) {

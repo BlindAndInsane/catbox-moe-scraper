@@ -9,7 +9,7 @@ import (
 
 type Config struct {
 	Workers         int      `yaml:"workers"`
-	RetryLimit      int      `yaml:"retry_limit"`
+	TryLimit        int      `yaml:"try_limit"`
 	DownloadEnabled bool     `yaml:"download_enabled"`
 	DownloadPath    string   `yaml:"download_path"`
 	AllowedExt      []string `yaml:"allowed_extensions"`

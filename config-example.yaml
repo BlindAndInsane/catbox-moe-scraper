@@ -1,5 +1,5 @@
 workers: 300 # Number of concurrent workers
-retry_limit: 2 # Number of retries for failed downloads or failed check
+try_limit: 1 # Number of tries to check a url
 
 download_enabled: false
 download_path: "./downloads" # Path to save the downloaded files

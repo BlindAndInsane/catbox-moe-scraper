@@ -1,7 +1,6 @@
 package catbox
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -14,125 +13,121 @@ import (
 	"time"
 )
 
-func Worker(ctx context.Context, db *sql.DB, idChan <-chan string, wg *sync.WaitGroup) {
+func Worker(db *sql.DB, idChan <-chan string, wg *sync.WaitGroup) {
+	wg.Add(1)
 	defer wg.Done()
 
-	for {
-		select {
-		case <-ctx.Done():
-			G_logger.Debug("Worker received stop signal. Exiting...")
-			return
-		default:
-			switch G_state {
-			case StateRunning:
-				for id := range idChan {
-					for _, ext := range G_config.AllowedExt {
-						retries := G_config.RetryLimit
-						var exists bool
-						var err error
+	for id := range idChan {
+		if G_state != StateRunning {
+			handleNonRunningState()
+			continue
+		}
 
-						for retries > 0 {
-							exists, err = checkFileExists(id, ext)
-							if err != nil {
-								retries--
-								if retries > 0 {
-									G_logger.Debugf("Retrying (%d retries left)...", retries)
-								} else {
-									G_logger.Debugf("Max retries reached. Skipping %s.", id)
-								}
-							} else {
-								break
-							}
-						}
+		processID(db, id)
+	}
+}
 
-						if exists {
-							G_Found_Per_Min.Add(1)
-							urll := fmt.Sprintf("%s%s%s", G_config.BaseURL, id, ext)
-							_, err := db.Exec("INSERT INTO valid_ids (id, url, ext) VALUES (?, ?, ?)", id, urll, ext)
-							if err != nil {
-								G_logger.Debugf("Failed to insert file record into database: %v", err)
-							}
+func handleNonRunningState() {
+	switch G_state {
+	case StatePaused:
+		time.Sleep(time.Second)
+	case StateStopped:
+		return
+	}
+}
 
-							if G_config.WebhookEnabled {
-								err = SendMessageToWebhook(urll)
-								if err != nil {
-									G_logger.Errorf("Failed to send message to webhook: %v", err)
-								}
-							}
+func processID(db *sql.DB, id string) {
+	for _, ext := range G_config.AllowedExt {
+		if !retryUntilSuccess(func() (bool, error) { return checkFileExists(id, ext) }, G_config.TryLimit) {
+			G_logger.Debugf("File does not exist: %s%s", id, ext)
+			continue
+		}
 
-							if G_config.DownloadEnabled {
-								downloadRetries := G_config.RetryLimit
-								for downloadRetries > 0 {
-									err := downloadFile(id, ext)
-									if err != nil {
-										downloadRetries--
-										if downloadRetries > 0 {
-											G_logger.Debugf("Retrying download (%d retries left)...", downloadRetries)
-										} else {
-											G_logger.Errorf("Max retries reached for download. Skipping %s.%s.", id, ext)
-										}
-									} else {
-										break
-									}
-								}
-							}
-						} else {
-							G_logger.Debugf("File does not exist: %s%s", id, ext)
-						}
-					}
-				}
-			case StatePaused:
-				time.Sleep(time.Second)
-				continue
-			case StateStopped:
-				return
-			}
+		G_Found_Per_Min.Add(1)
+		url := fmt.Sprintf("%s%s%s", G_config.BaseURL, id, ext)
+		if err := insertFileRecord(db, id, url, ext); err != nil {
+			G_logger.Debugf("Failed to insert file record: %v", err)
+		}
+
+		if G_config.WebhookEnabled {
+			sendToWebhook(url)
+		}
+
+		if G_config.DownloadEnabled {
+			downloadFileWithRetry(id, ext)
 		}
 	}
 }
 
-func checkFileExists(id, ext string) (bool, error) {
-	var client *http.Client
-	url_s := fmt.Sprintf("%s%s%s", G_config.BaseURL, id, ext)
-
-	if G_config.UseProxies {
-		proxy := G_proxyManager.GetNextProxy()
-		G_logger.Debugf("Using proxy: %s", proxy)
-
-		proxyURL, err := url.Parse(fmt.Sprintf("%s://%s", G_config.ProxyType, proxy))
+func retryUntilSuccess(action func() (bool, error), maxRetries int) bool {
+	for tries := maxRetries; tries > 0; tries-- {
+		success, err := action()
 		if err != nil {
+			G_logger.Debugf("Error encountered, retries left: %d, error: %v", tries-1, err)
+			continue
+		}
+		if success {
+			return true
+		}
+	}
+	return false
+}
+
+func insertFileRecord(db *sql.DB, id, url, ext string) error {
+	_, err := db.Exec("INSERT INTO valid_ids (id, url, ext) VALUES (?, ?, ?)", id, url, ext)
+	return err
+}
+
+func sendToWebhook(url string) {
+	if err := SendMessageToWebhook(url); err != nil {
+		G_logger.Errorf("Failed to send to webhook: %v", err)
+	}
+}
+
+func downloadFileWithRetry(id, ext string) {
+	retryUntilSuccess(func() (bool, error) {
+		if err := downloadFile(id, ext); err != nil {
 			return false, err
 		}
-		transport := &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
-			DialContext: (&net.Dialer{
-				Timeout: 5 * time.Second,
-			}).DialContext,
-			TLSHandshakeTimeout: 7 * time.Second,
-		}
-		client = &http.Client{Transport: transport, Timeout: 10 * time.Second}
-	} else {
-		client = &http.Client{Timeout: 5 * time.Second}
-	}
+		return true, nil
+	}, G_config.TryLimit)
+}
 
-	req, err := http.NewRequest("HEAD", url_s, nil)
+func checkFileExists(id, ext string) (bool, error) {
+	url := fmt.Sprintf("%s%s%s", G_config.BaseURL, id, ext)
+	client := createHttpClient()
+
+	req, err := http.NewRequest("HEAD", url, nil)
 	if err != nil {
 		return false, err
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		G_logger.Debugf("Error making request for %s: %v", url_s, err)
+		G_logger.Debugf("Request error for %s: %v", url, err)
 		return false, nil
 	}
 	defer resp.Body.Close()
 
 	G_Req_Per_Sec.Add(1)
+	return resp.StatusCode == http.StatusOK, nil
+}
 
-	if resp.StatusCode == http.StatusOK {
-		return true, nil
+func createHttpClient() *http.Client {
+	if G_config.UseProxies {
+		proxy := G_proxyManager.GetNextProxy()
+		G_logger.Debugf("Using proxy: %s", proxy)
+		proxyURL, _ := url.Parse(fmt.Sprintf("%s://%s", G_config.ProxyType, proxy))
+		return &http.Client{
+			Transport: &http.Transport{
+				Proxy:               http.ProxyURL(proxyURL),
+				DialContext:         (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+				TLSHandshakeTimeout: 5 * time.Second,
+			},
+			Timeout: 5 * time.Second,
+		}
 	}
-	return false, nil
+	return &http.Client{Timeout: 2 * time.Second}
 }
 
 func downloadFile(id, ext string) error {
@@ -141,29 +136,24 @@ func downloadFile(id, ext string) error {
 
 	resp, err := http.Get(url)
 	if err != nil {
-		G_logger.Errorf("Failed to download %s: %v", url, err)
-		return err
+		return fmt.Errorf("failed to download %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		G_logger.Errorf("Failed to download %s: Status %d", url, resp.StatusCode)
-		return err
+		return fmt.Errorf("download failed, status: %d", resp.StatusCode)
 	}
 
 	out, err := os.Create(filePath)
 	if err != nil {
-		G_logger.Errorf("Failed to create file %s: %v", filePath, err)
-		return err
+		return fmt.Errorf("failed to create file %s: %w", filePath, err)
 	}
 	defer out.Close()
 
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		G_logger.Errorf("Failed to write file %s: %v", filePath, err)
-		return err
+	if _, err = io.Copy(out, resp.Body); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", filePath, err)
 	}
 
-	G_logger.Debugf("Successfully downloaded: %s", url)
+	G_logger.Debugf("Downloaded: %s", url)
 	return nil
 }
